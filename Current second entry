@@ -1,0 +1,1310 @@
+//@version=5
+strategy("Second Entry Strategy", overlay=true,  pyramiding=1, initial_capital=100, commission_value=0.05, default_qty_type=strategy.cash, default_qty_value=100, process_orders_on_close=false, calc_on_order_fills=false, calc_on_every_tick=true, use_bar_magnifier=true)
+
+import mentalRock19315/Slope_TK/1 as TK
+
+// Input Parameters
+emaLength = input.int(21, "EMA Length")
+pivotLegs = input.int(1, "Pivot Legs")
+tpPercent = input.float(1.5, "Take Profit %")
+slPercent = input.float(1.5, "Stop Loss %")
+
+// Calculate EMA
+ema = ta.ema(close, emaLength)
+size = input.int(10, "Bars for Impulse slope")
+maxSetupBars = input.int(25, "Maximum Bars for Setup", minval=1)
+slope_value = input.int(20, "slope value")
+ema_slope = TK.slope(ema, size)
+ema_distance = math.abs((close - ema) / ema * 100)
+ema_distance_thresh = input.float(0.5, "EMA distance Threshold %", minval=0, step = 0.1)
+
+tolerance = input.float(0.5, "Price Tolerance %", minval=0.1, maxval=5, step=0.1)
+maxPivots = input.int(20, "Max Pivots to Track", minval=5)
+Pivot_thresh = input.int(7, "Max Pivots Threshold")
+showLongs = input.bool(true, "Show Longs (Pivot Highs)")
+showShorts = input.bool(true, "Show Shorts (Pivot Lows)")
+
+// At the start of your script
+[currLow, currHigh, prevLow] = request.security(syminfo.tickerid, timeframe.period, [low, high, low[1]], lookahead=barmerge.lookahead_off)
+
+// Pivot High/Low Detection
+leftBars = pivotLegs
+rightBars = pivotLegs
+ph = ta.pivothigh(high, leftBars, rightBars)
+pl = ta.pivotlow(low, leftBars, rightBars)
+
+ph_intrade = ta.pivothigh(high, leftBars, rightBars)
+pl_intrade = ta.pivotlow(low, leftBars, rightBars)
+
+// Pivot Storage Arrays
+var float[] pivotHighPrices = array.new_float(0)
+var int[] pivotHighBars = array.new_int(0)
+var float[] pivotLowPrices = array.new_float(0)
+var int[] pivotLowBars = array.new_int(0)
+
+var float[] pivotHighPrices_intrade = array.new_float(0)
+var int[] pivotHighBars_intrade = array.new_int(0)
+var float[] pivotLowPrices_intrade = array.new_float(0)
+var int[] pivotLowBars_intrade = array.new_int(0)
+
+// State Variables {
+var float pivotHigh = na
+var float pivotLow = na
+var int pivotHighBar = na
+var int pivotLowBar = na
+var float firstEntryHigh = na
+var float firstEntryLow = na
+var int firstEntryBarHigh = na
+var int firstEntryBarLow = na
+var float pullbackHigh = na
+var float pullbackLow = na
+var int pullbackBarLong = na
+var int pullbackBarShort = na
+var float secondEntryHigh = na
+var float secondEntryLow = na
+var bool inLongSetup = false
+var bool inShortSetup = false
+var bool waitingForPullback = false
+var bool waitingForSecondEntryLong = false
+var bool waitingForSecondEntryShort = false
+var bool inTrade = false
+var bool isFailedSetup = false
+var bool pivotConfirmedHigh = false 
+var bool pivotConfirmedLow = false 
+//}
+
+// State Variables {
+var float pivotHigh_intrade = na
+var float pivotLow_intrade = na
+var int pivotHighBar_intrade = na
+var int pivotLowBar_intrade = na
+var float firstEntryHigh_intrade = na
+var float firstEntryLow_intrade = na
+var int firstEntryBarHigh_intrade = na
+var int firstEntryBarLow_intrade = na
+var float pullbackHigh_intrade = na
+var float pullbackLow_intrade = na
+var int pullbackBarLong_intrade = na
+var int pullbackBarShort_intrade = na
+var float secondEntryHigh_intrade = na
+var float secondEntryLow_intrade = na
+var bool inLongSetup_intrade = false
+var bool inShortSetup_intrade = false
+var bool waitingForPullbackLong_intrade = false
+var bool waitingForPullbackShort_intrade = false
+var bool waitingForSecondEntryLong_intrade = false
+var bool waitingForSecondEntryShort_intrade = false
+var bool inTrade_intrade = false
+var bool isFailedSetup_intrade = false
+var bool pivotConfirmedHigh_intrade = false 
+var bool pivotConfirmedLow_intrade = false 
+//}
+
+
+// Add global variables for stop loss and take profit
+var float stopLoss = na
+var float takeProfit = na
+int secondEntryBar = na
+int secondEntryBar_intrade = na
+
+lookback = 10
+conditionMet = true
+
+// ===============================================================================================================
+// STEP 1: PIVOT DETECTION & CLASSIFICATION ==========================================================================={
+// ===============================================================================================================
+
+// Detect new pivot high/low and initiate setup only if we're not in an existing setup
+for i = 0 to lookback - 1
+    // Check if close price was NOT above the EMA for any of the bars
+    if not (close[i] > ema[i])
+        conditionMet := false
+        break // Exit the loop as soon as one bar fails the condition
+
+// ============================================================================
+// PIVOT HIGH DETECTION AND CONFIRMATION
+f_detectPivotHigh(float _ph, bool _inShortSetup, bool _waitingForPullback, bool _waitingForSecondEntry, 
+                  float _pivotHigh, int _pivotHighBar,
+                  array<float> _pivotHighPrices, array<int> _pivotHighBars, 
+                  int _rightBars, int _maxPivots) =>
+    
+    newPivotHigh = _pivotHigh
+    newPivotHighBar = _pivotHighBar
+    pivotDetected = false
+    
+    // Detect pivot without checking setup state - just check if we're not already tracking something
+    if _ph and not _inShortSetup and not _waitingForPullback and not _waitingForSecondEntry 
+        newPivotHigh := high[_rightBars]
+        newPivotHighBar := bar_index[_rightBars]
+        pivotDetected := true
+        
+        // Store in arrays
+        array.unshift(_pivotHighPrices, newPivotHigh)
+        array.unshift(_pivotHighBars, newPivotHighBar)
+        
+        // Keep only last maxPivots
+        if array.size(_pivotHighPrices) > _maxPivots
+            array.pop(_pivotHighPrices)
+            array.pop(_pivotHighBars)
+    
+    [newPivotHigh, newPivotHighBar, pivotDetected]
+
+// PIVOT CONFIRMATION - Confirms pivot AND activates setup
+f_confirmPivotHigh(bool _inLongSetup, bool _pivotConfirmedHigh, bool _waitingForPullback, 
+                   int _pivotHighBar, bool _pivotDetected) =>
+    
+    newPivotConfirmedHigh = _pivotConfirmedHigh
+    newInLongSetup = _inLongSetup
+    
+    // If a new pivot was just detected, activate setup (don't wait for confirmation)
+    if _pivotDetected
+        newInLongSetup := true
+        newPivotConfirmedHigh := false
+    
+    // Confirm the pivot if setup is active
+    int barsSincePivotHigh = bar_index - _pivotHighBar
+    if newInLongSetup and not newPivotConfirmedHigh and not _waitingForPullback and not na(_pivotHighBar) and barsSincePivotHigh > 0
+        if barsSincePivotHigh <= 500  // Pine Script lookback limit
+            if low[barsSincePivotHigh - 1] < low[barsSincePivotHigh]
+                newPivotConfirmedHigh := true
+    
+    [newInLongSetup, newPivotConfirmedHigh]
+
+// LONG PIVOT DETECTION
+[_tempPivotHigh, _tempPivotHighBar, _pivotDetectedLong] = 
+     f_detectPivotHigh(ph, inShortSetup, waitingForPullback, waitingForSecondEntryLong,
+                      pivotHigh, pivotHighBar, pivotHighPrices, pivotHighBars, 
+                      rightBars, maxPivots)
+
+pivotHigh := _tempPivotHigh
+pivotHighBar := _tempPivotHighBar
+
+// Confirmation handles setup activation
+[_tempInLongSetup, _tempPivotConfHigh] = 
+     f_confirmPivotHigh(inLongSetup, pivotConfirmedHigh, waitingForPullback, 
+                       pivotHighBar, _pivotDetectedLong)
+
+inLongSetup := _tempInLongSetup
+pivotConfirmedHigh := _tempPivotConfHigh
+
+
+// ============================================================================
+// PIVOT LOW DETECTION - Only detects pivots, doesn't check setup state
+f_detectPivotLow(float _pl, bool _inLongSetup, bool _waitingForPullback, bool _waitingForSecondEntry, 
+                  float _pivotLow, int _pivotLowBar,
+                  array<float> _pivotLowPrices, array<int> _pivotLowBars, 
+                  int _rightBars, int _maxPivots) =>
+    
+    newPivotLow = _pivotLow
+    newPivotLowBar = _pivotLowBar
+    pivotDetected = false
+    
+    // Detect pivot without checking setup state - just check if we're not already tracking something
+    if _pl and not _inLongSetup and not _waitingForPullback and not _waitingForSecondEntry 
+        newPivotLow := low[_rightBars]
+        newPivotLowBar := bar_index[_rightBars]
+        pivotDetected := true
+        
+        // Store in arrays
+        array.unshift(_pivotLowPrices, newPivotLow)
+        array.unshift(_pivotLowBars, newPivotLowBar)
+        
+        // Keep only last maxPivots
+        if array.size(_pivotLowPrices) > _maxPivots
+            array.pop(_pivotLowPrices)
+            array.pop(_pivotLowBars)
+    
+    [newPivotLow, newPivotLowBar, pivotDetected]
+
+// PIVOT CONFIRMATION - Confirms pivot AND activates setup
+f_confirmPivotLow(bool _inShortSetup, bool _pivotConfirmedLow, bool _waitingForPullback, 
+                   int _pivotLowBar, bool _pivotDetected) =>
+    
+    newPivotConfirmedLow = _pivotConfirmedLow
+    newInShortSetup = _inShortSetup
+    
+    // If a new pivot was just detected, activate setup (don't wait for confirmation)
+    if _pivotDetected
+        newInShortSetup := true
+        newPivotConfirmedLow := false
+    
+    // Confirm the pivot if setup is active
+    int barsSincePivotLow = bar_index - _pivotLowBar
+    if newInShortSetup and not newPivotConfirmedLow and not _waitingForPullback and not na(_pivotLowBar) and barsSincePivotLow > 0
+        if barsSincePivotLow <= 500  // Pine Script lookback limit
+            // Check if the bar AFTER the pivot has higher high than pivot bar
+            if high[barsSincePivotLow - 1] > high[barsSincePivotLow]
+                newPivotConfirmedLow := true
+    
+    [newInShortSetup, newPivotConfirmedLow]
+
+// SHORT PIVOT DETECTION
+[_tempPivotLow, _tempPivotLowBar, _pivotDetectedShort] = 
+     f_detectPivotLow(pl, inLongSetup, waitingForPullback, waitingForSecondEntryShort,
+                      pivotLow, pivotLowBar, pivotLowPrices, pivotLowBars, 
+                      rightBars, maxPivots)
+
+pivotLow := _tempPivotLow
+pivotLowBar := _tempPivotLowBar
+
+// Confirmation handles setup activation
+[_tempInShortSetup, _tempPivotConfLow] = 
+     f_confirmPivotLow(inShortSetup, pivotConfirmedLow, waitingForPullback, 
+                       pivotLowBar, _pivotDetectedShort)
+
+inShortSetup := _tempInShortSetup
+pivotConfirmedLow := _tempPivotConfLow
+
+
+// Function to count pivots near current price
+f_countPivotHighsNearPrice(float currentPrice, float tolerancePct) =>
+    int count = 0
+    int arraySize = array.size(pivotHighPrices)
+    
+    // Only process if array has elements
+    if arraySize > 0
+        float toleranceRange = currentPrice * (tolerancePct / 100)
+        
+        for i = 0 to arraySize - 1
+            float pivotPrice = array.get(pivotHighPrices, i)
+            
+            if math.abs(currentPrice - pivotPrice) <= toleranceRange
+                count += 1
+    
+    count
+
+f_countPivotLowsNearPrice(float currentPrice, float tolerancePct) =>
+    int count = 0
+    int arraySize = array.size(pivotLowPrices)
+    
+    // Only process if array has elements
+    if arraySize > 0
+        float toleranceRange = currentPrice * (tolerancePct / 100)
+        
+        for i = 0 to arraySize - 1
+            float pivotPrice = array.get(pivotLowPrices, i)
+            
+            if math.abs(currentPrice - pivotPrice) <= toleranceRange
+                count += 1
+    
+    count
+
+// Calculate counts
+pivotHighsNearby = showLongs ? f_countPivotHighsNearPrice(close, tolerance) : 0
+pivotLowsNearby = showShorts ? f_countPivotLowsNearPrice(close, tolerance) : 0
+
+// Plot Pivot Points (Step 1)
+plotshape(ph and not waitingForPullback and not waitingForSecondEntryLong and strategy.position_size == 0 ? high[rightBars] : na, 
+          title="Pivot High", location=location.absolute, 
+          color=color.rgb(0, 255, 8, 35), style=shape.triangledown, size=size.tiny, offset=-rightBars)
+
+plotshape(pl and not waitingForPullback and not waitingForSecondEntryShort and strategy.position_size == 0 ? low[rightBars] : na, 
+          title="Pivot Low", location=location.absolute, 
+          color=color.rgb(253, 0, 0, 39), style=shape.triangleup, size=size.tiny, offset=-rightBars)
+
+//}
+
+// ===============================================================================================================
+// STEP 2: FE DETECTION ==============================================================================================={
+// ===============================================================================================================
+// First Entry Detection for Longs
+f_handleLongSetupEntry(bool _inLongSetup, bool _waitingForPullback, bool _waitingForSecondEntry, 
+                       float _pivotHigh, int _pivotHighBar, bool _pivotConfirmedHigh,
+                       float _firstEntryHigh, float _firstEntryLow, int _firstEntryBarHigh) =>
+    
+    newFirstEntryHigh = _firstEntryHigh
+    newFirstEntryLow = _firstEntryLow
+    newFirstEntryBarHigh = _firstEntryBarHigh
+    newWaitingForPullback = _waitingForPullback
+    newInLongSetup = _inLongSetup
+    newIsFailedSetup = false
+    
+    if _inLongSetup and not _waitingForPullback and not _waitingForSecondEntry and _pivotConfirmedHigh and na(newFirstEntryBarHigh) and strategy.position_size == 0
+        
+        if high > high[1] and high < _pivotHigh and bar_index > _pivotHighBar and close > ema
+            newFirstEntryHigh := high
+            newFirstEntryLow := low
+            newFirstEntryBarHigh := bar_index
+            newWaitingForPullback := true
+        
+        else if high > high[1] and high < _pivotHigh and bar_index > _pivotHighBar and close < ema
+            newFirstEntryHigh := na
+            newFirstEntryLow := na
+            newFirstEntryBarHigh := na
+            newWaitingForPullback := false
+            newInLongSetup := false
+            newIsFailedSetup := true
+    
+    [newFirstEntryHigh, newFirstEntryLow, newFirstEntryBarHigh, newWaitingForPullback, newInLongSetup, newIsFailedSetup]
+
+
+
+// Use DIFFERENT variable names for the tuple assignment, then reassign
+[_tempHigh, _tempLow, _tempBar, _tempPullback, _tempSetup, _tempFailed] = f_handleLongSetupEntry(inLongSetup, waitingForPullback, waitingForSecondEntryLong, 
+                           pivotHigh, pivotHighBar, pivotConfirmedHigh, 
+                           firstEntryHigh, firstEntryLow, firstEntryBarHigh)
+
+// Now reassign to your actual variables
+firstEntryHigh := _tempHigh
+firstEntryLow := _tempLow
+firstEntryBarHigh := _tempBar
+waitingForPullback := _tempPullback
+inLongSetup := _tempSetup
+isFailedSetup := _tempFailed
+
+
+// First Entry Detection for Shorts
+f_handleShortSetupEntry(bool _inShortSetup, bool _waitingForPullback, bool _waitingForSecondEntry, 
+                         float _pivotLow, int _pivotLowBar, bool _pivotConfirmedLow,
+                         float _firstEntryHigh, float _firstEntryLow, int _firstEntryBarLow) =>
+    
+    newFirstEntryHigh = _firstEntryHigh
+    newFirstEntryLow = _firstEntryLow
+    newFirstEntryBarLow = _firstEntryBarLow
+    newWaitingForPullback = _waitingForPullback
+    newInShortSetup = _inShortSetup
+    newIsFailedSetup = false
+    
+    if _inShortSetup and not _waitingForPullback and not _waitingForSecondEntry and _pivotConfirmedLow and na(newFirstEntryBarLow) and strategy.position_size == 0
+        
+        // Valid entry below EMA
+        if low < low[1] and low > _pivotLow and bar_index > _pivotLowBar and close < ema
+            newFirstEntryHigh := high
+            newFirstEntryLow := low
+            newFirstEntryBarLow := bar_index
+            newWaitingForPullback := true
+        
+        // Failed setup - close above EMA
+        else if low < low[1] and low > _pivotLow and bar_index > _pivotLowBar and close > ema
+            newFirstEntryHigh := na
+            newFirstEntryLow := na
+            newFirstEntryBarLow := na
+            newWaitingForPullback := false
+            newInShortSetup := false
+            newIsFailedSetup := true
+    
+    [newFirstEntryHigh, newFirstEntryLow, newFirstEntryBarLow, newWaitingForPullback, newInShortSetup, newIsFailedSetup]
+
+// Usage (assuming you already have these variables declared):
+[_tempHighShort, _tempLowShort, _tempBarShort, _tempPullbackShort, _tempSetupShort, _tempFailedShort] = f_handleShortSetupEntry(inShortSetup, waitingForPullback, waitingForSecondEntryShort, 
+                             pivotLow, pivotLowBar, pivotConfirmedLow, 
+                             firstEntryHigh, firstEntryLow, firstEntryBarLow)
+
+// Reassign to actual variables
+firstEntryHigh := _tempHighShort
+firstEntryLow := _tempLowShort
+firstEntryBarLow := _tempBarShort
+waitingForPullback := _tempPullbackShort
+inShortSetup := _tempSetupShort
+isFailedSetup := _tempFailedShort
+
+// Plot First Entry Points (Step 2)
+plotshape(waitingForPullback and not waitingForSecondEntryLong and inLongSetup and high > high[1] and high < pivotHigh and bar_index == firstEntryBarHigh and strategy.position_size == 0, title="First Entry Long", location=location.abovebar, color=color.green, style=shape.square, size=size.tiny)
+
+plotshape(waitingForPullback and not waitingForSecondEntryShort and inShortSetup and low < low[1] and low > pivotLow and bar_index == firstEntryBarLow and strategy.position_size == 0, title="First Entry Short", location=location.belowbar, color=color.red, style=shape.square, size=size.tiny)
+
+
+// }
+
+// ===============================================================================================================
+// STEP 3: PULLBACK DETECTION ========================================================================================={
+// ===============================================================================================================
+// Pullback Detection for Longs 
+f_detectLongPullback(bool _inLongSetup, bool _waitingForPullback, bool _waitingForSecondEntry,
+                     int _firstEntryBarHigh, float _pullbackHigh, float _pullbackLow, int _pullbackBarLong) =>
+    
+    newPullbackHigh = _pullbackHigh
+    newPullbackLow = _pullbackLow
+    newPullbackBarLong = _pullbackBarLong
+    newWaitingForPullback = _waitingForPullback
+    newWaitingForSecondEntry = _waitingForSecondEntry
+    
+    if _inLongSetup and _waitingForPullback and not _waitingForSecondEntry and strategy.position_size == 0
+        int barsSinceFE = bar_index - _firstEntryBarHigh
+        if not na(_firstEntryBarHigh) and bar_index > _firstEntryBarHigh
+            for i = 0 to barsSinceFE 
+                if low[i] < low[i+1]
+                    newPullbackHigh := high[i]
+                    newPullbackLow := low[i]
+                    newPullbackBarLong := bar_index[i]
+                    newWaitingForPullback := false
+                    newWaitingForSecondEntry := true
+                    break
+    
+    [newPullbackHigh, newPullbackLow, newPullbackBarLong, newWaitingForPullback, newWaitingForSecondEntry]
+
+// Usage for Long Pullback
+[_tempPBHighLong, _tempPBLowLong, _tempPBBarLong, _tempWaitPBLong, _tempWaitSELong] = f_detectLongPullback(inLongSetup, waitingForPullback, waitingForSecondEntryLong,
+                         firstEntryBarHigh, pullbackHigh, pullbackLow, pullbackBarLong)
+
+pullbackHigh := _tempPBHighLong
+pullbackLow := _tempPBLowLong
+pullbackBarLong := _tempPBBarLong
+waitingForPullback := _tempWaitPBLong
+waitingForSecondEntryLong := _tempWaitSELong
+
+
+// Pullback Detection for Shorts
+f_detectShortPullback(bool _inShortSetup, bool _waitingForPullback, bool _waitingForSecondEntry,
+                      int _firstEntryBarLow, float _pullbackHigh, float _pullbackLow, int _pullbackBarShort) =>
+    
+    newPullbackHigh = _pullbackHigh
+    newPullbackLow = _pullbackLow
+    newPullbackBarShort = _pullbackBarShort
+    newWaitingForPullback = _waitingForPullback
+    newWaitingForSecondEntry = _waitingForSecondEntry
+    
+    if _inShortSetup and _waitingForPullback and not _waitingForSecondEntry and strategy.position_size == 0
+        int barsSinceFE = bar_index - _firstEntryBarLow
+        if not na(_firstEntryBarLow) and bar_index > _firstEntryBarLow
+            for i = 0 to barsSinceFE 
+                if high[i] > high[i+1]
+                    newPullbackHigh := high[i]
+                    newPullbackLow := low[i]
+                    newPullbackBarShort := bar_index[i]
+                    newWaitingForPullback := false
+                    newWaitingForSecondEntry := true
+                    break
+    
+    [newPullbackHigh, newPullbackLow, newPullbackBarShort, newWaitingForPullback, newWaitingForSecondEntry]
+
+// Usage for Short Pullback
+[_tempPBHighShort, _tempPBLowShort, _tempPBBarShort, _tempWaitPBShort, _tempWaitSEShort] = f_detectShortPullback(inShortSetup, waitingForPullback, waitingForSecondEntryShort,
+                          firstEntryBarLow, pullbackHigh, pullbackLow, pullbackBarShort)
+
+pullbackHigh := _tempPBHighShort
+pullbackLow := _tempPBLowShort
+pullbackBarShort := _tempPBBarShort
+waitingForPullback := _tempWaitPBShort
+waitingForSecondEntryShort := _tempWaitSEShort
+
+// Plot Pullback Points (Step 3)
+plotshape(waitingForSecondEntryLong and inLongSetup and bar_index == pullbackBarLong, 
+          title="Pullback Long", location=location.belowbar, 
+          color=color.green, style=shape.circle, size=size.tiny)
+
+plotshape(waitingForSecondEntryShort and inShortSetup and bar_index == pullbackBarShort, 
+          title="Pullback Short", location=location.abovebar, 
+          color=color.red, style=shape.circle, size=size.tiny)
+
+// }
+
+// ===============================================================================================================
+// STEP 4: SETUP FAILURE DETECTION ===================================================================================={
+// ===============================================================================================================
+// LONG SETUP INVALIDATION/RESET
+f_checkLongSetupInvalidation(bool _inLongSetup, float _pivotHigh, int _pivotHighBar, int _maxSetupBars) =>
+    
+    shouldReset = false
+    
+    if inLongSetup
+        if high >= pivotHigh or (inLongSetup and (bar_index - pivotHighBar) > maxSetupBars)
+            shouldReset := true
+    
+    shouldReset
+
+// Usage for Long Setup Invalidation
+if f_checkLongSetupInvalidation(inLongSetup, pivotHigh, pivotHighBar, maxSetupBars)
+    pivotHigh := na
+    pivotHighBar := na
+    pivotLowBar := na
+    firstEntryHigh := na
+    firstEntryLow := na
+    firstEntryBarHigh := na
+    pullbackHigh := na
+    pullbackLow := na
+    pullbackBarLong := na
+    secondEntryHigh := na
+    secondEntryLow := na
+    inLongSetup := false
+    waitingForPullback := false
+    waitingForSecondEntryLong := false
+    isFailedSetup := false
+    pivotConfirmedHigh := false
+
+
+// SHORT SETUP INVALIDATION/RESET
+f_checkShortSetupInvalidation(bool _inShortSetup, float _pivotLow, int _pivotLowBar, int _maxSetupBars) =>
+    
+    shouldReset = false
+    
+    if _inShortSetup
+        if low <= _pivotLow or (_inShortSetup and (bar_index - _pivotLowBar) > _maxSetupBars)
+            shouldReset := true
+    
+    shouldReset
+
+// Usage for Short Setup Invalidation
+if f_checkShortSetupInvalidation(inShortSetup, pivotLow, pivotLowBar, maxSetupBars)
+    pivotHigh := na
+    pivotLow := na
+    pivotHighBar := na
+    pivotLowBar := na
+    firstEntryHigh := na
+    firstEntryLow := na
+    firstEntryBarLow := na
+    pullbackHigh := na
+    pullbackLow := na
+    pullbackBarShort := na
+    secondEntryHigh := na
+    secondEntryLow := na
+    inLongSetup := false
+    inShortSetup := false
+    waitingForPullback := false
+    waitingForSecondEntryShort := false
+    isFailedSetup := false
+    pivotConfirmedLow := false
+
+
+// }
+
+// ===============================================================================================================
+// STEP 5: SECOND ENTRY DETECTION & EXECUTION ========================================================================={
+// ===============================================================================================================
+float second_entry_long_loc = 0
+float second_entry_short_loc = 0
+bool higherHighFound = false
+bool LowerLowFound = false
+
+
+// Second Entry Detection for Longs
+if (inLongSetup and waitingForSecondEntryLong and not inTrade) or inLongSetup and waitingForSecondEntryLong and strategy.position_size < 0
+    ema_distance := math.abs((close - ema) / ema * 100)
+    // Check if current bar has higher high than previous
+    if high > high[1]
+        second_entry_long_loc := high
+        // If second entry forms below EMA, cancel setup
+
+        // Only enter if we're above EMA
+        int barsSincePullback = bar_index - pullbackBarLong
+        if not na(pullbackBarLong) and bar_index > pullbackBarLong
+            for i = 2 to barsSincePullback 
+                if high[i] > high[i+1]
+                    higherHighFound := true
+                    break // Exit the loop immediately once a higher high is found
+
+        if not higherHighFound and ema_slope > slope_value and ema_distance < ema_distance_thresh and pivotHighsNearby < Pivot_thresh
+            strategy.close('Short', "early short exit")
+            // Calculate bar distances
+            var string entryComment = ""
+            entryComment := "Second Entry Long | " + "Pivot: " + str.tostring(bar_index - pivotHighBar) + " | " + "First: " + str.tostring(bar_index - firstEntryBarHigh) + " | " + "PB: " + str.tostring(bar_index - pullbackBarLong)
+
+            secondEntryHigh := high
+            secondEntryLow := low
+            secondEntryBar := bar_index
+            strategy.entry("Long", strategy.long, comment=entryComment)
+            inTrade := true
+            inLongSetup := false
+            
+            // Calculate stop loss and take profit levels
+            stopLoss := close * (1 - slPercent/100)
+            takeProfit := close * (1 + tpPercent/100)
+            
+            strategy.exit("Long Exit", "Long", stop=stopLoss, limit=takeProfit)
+
+
+
+// Second Entry Detection for Shorts
+if inShortSetup and waitingForSecondEntryShort and not inTrade or inShortSetup and waitingForSecondEntryShort and strategy.position_size > 0
+    ema_distance := math.abs((close - ema) / ema * 100)
+    // Check if current bar has lower low than previous
+    if low < low[1]
+        second_entry_short_loc := low
+        // Only enter if we're above EMA
+        int barsSincePullback = bar_index - pullbackBarShort
+        if not na(pullbackBarShort) and bar_index > pullbackBarShort
+            for i = 2 to barsSincePullback 
+                if low[i] < low[i+1]
+                    higherHighFound := true
+                    break // Exit the loop immediately once a higher high is found
+        // Only enter if we're below EMA
+        if not LowerLowFound and ema_slope < -slope_value and ema_distance < ema_distance_thresh and pivotLowsNearby < Pivot_thresh
+            strategy.close('Long', "early long exit")
+            // Calculate bar distances
+            var string entryComment = ""
+            entryComment := "Second Entry Short | " +  "Pivot: " + str.tostring(bar_index - pivotLowBar) + " | " + "First: " + str.tostring(bar_index - firstEntryBarLow) + " | " + "PB: " + str.tostring(bar_index - pullbackBarShort)
+            secondEntryHigh := high
+            secondEntryLow := low
+            secondEntryBar := bar_index
+            strategy.entry("Short", strategy.short, stop = prevLow, comment=entryComment)
+            inTrade := true
+            inShortSetup := false
+            
+            // Calculate stop loss and take profit levels
+            stopLoss := close * (1 + slPercent/100)
+            takeProfit := close * (1 - tpPercent/100)
+            
+            strategy.exit("Short Exit", "Short", stop=stopLoss, limit=takeProfit)
+
+plotarrow(second_entry_long_loc, colordown = color.rgb(255, 82, 82, 57), maxheight = 10)
+plotarrow(-second_entry_short_loc, colorup = color.rgb(76, 175, 79, 54), maxheight = 10)
+
+// }
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// COUNTER ENTRIES
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////  
+
+// ===============================================================================================================
+// STEP 1: PIVOT DETECTION & CLASSIFICATION ==========================================================================={
+// ===============================================================================================================
+
+// Detect new pivot high/low and initiate setup only if we're not in an existing setup
+for i = 0 to lookback - 1
+    // Check if close price was NOT above the EMA for any of the bars
+    if not (close[i] > ema[i])
+        conditionMet := false
+        break // Exit the loop as soon as one bar fails the condition
+
+// ============================================================================
+// PIVOT HIGH DETECTION AND CONFIRMATION
+f_detectPivotHigh_intrade(float _ph, bool _inLongSetup, bool _inShortSetup, bool _waitingForPullback,
+                 bool _waitingForSecondEntry, float _pivotHigh, int _pivotHighBar,
+                 array<float> _pivotHighPrices, array<int> _pivotHighBars, int _rightBars, int _maxPivots) =>
+
+    newPivotHigh = _pivotHigh
+    newPivotHighBar = _pivotHighBar
+    newInLongSetup = _inLongSetup
+    newPivotConfirmedHigh = false
+
+    if _ph and not inLongSetup_intrade and not _waitingForPullback and not _waitingForSecondEntry
+        newPivotHigh := high[_rightBars]
+        newPivotHighBar := bar_index[_rightBars]
+
+        // Store in arrays
+        array.unshift(_pivotHighPrices, newPivotHigh)
+        array.unshift(_pivotHighBars, newPivotHighBar)
+
+        // Keep only last maxPivots
+        if array.size(_pivotHighPrices) > _maxPivots
+            array.pop(_pivotHighPrices)
+            array.pop(_pivotHighBars)
+
+        newInLongSetup := true
+        newPivotConfirmedHigh := false
+
+    [newPivotHigh, newPivotHighBar, newInLongSetup, newPivotConfirmedHigh]
+
+f_confirmPivotHigh_intrade(bool _inLongSetup, bool _pivotConfirmedHigh, bool _waitingForPullback, int _pivotHighBar) =>
+
+    newPivotConfirmedHigh = _pivotConfirmedHigh
+
+    int barsSincePivotHigh = bar_index - _pivotHighBar
+    if _inLongSetup and not _pivotConfirmedHigh and not _waitingForPullback and not na(_pivotHighBar) and barsSincePivotHigh > 0
+        if low[barsSincePivotHigh - 1] < low[barsSincePivotHigh]
+            newPivotConfirmedHigh := true
+
+    newPivotConfirmedHigh
+
+// Usage for Pivot High Detection
+[_tempPivotHigh_intrade, _tempPivotHighBar_intrade, _tempInLongSetup_intrade, _tempPivotConfHigh_intrade] = f_detectPivotHigh_intrade(ph_intrade, inLongSetup_intrade, inShortSetup_intrade, waitingForPullbackLong_intrade, waitingForSecondEntryLong_intrade,
+                      pivotHigh_intrade, pivotHighBar_intrade, pivotHighPrices_intrade, pivotHighBars_intrade, rightBars, maxPivots)
+
+pivotHigh_intrade := _tempPivotHigh_intrade
+pivotHighBar_intrade := _tempPivotHighBar_intrade
+inLongSetup_intrade := _tempInLongSetup_intrade
+pivotConfirmedHigh_intrade := _tempPivotConfHigh_intrade
+
+// Usage for Pivot High Confirmation
+pivotConfirmedHigh_intrade := f_confirmPivotHigh_intrade(inLongSetup_intrade, pivotConfirmedHigh_intrade, waitingForPullbackLong_intrade, pivotHighBar_intrade)
+
+// ============================================================================
+// PIVOT LOW DETECTION AND CONFIRMATION
+f_detectPivotLow_intrade(float _pl, bool _inLongSetup, bool _inShortSetup, bool _waitingForPullback, 
+                 bool _waitingForSecondEntry, float _pivotLow, int _pivotLowBar,
+                 array<float> _pivotLowPrices, array<int> _pivotLowBars, int _rightBars, int _maxPivots) =>
+    
+    newPivotLow = _pivotLow
+    newPivotLowBar = _pivotLowBar
+    newInShortSetup = _inShortSetup
+    newPivotConfirmedLow = false
+    
+    if _pl and not inShortSetup_intrade and not _waitingForPullback and not _waitingForSecondEntry 
+        newPivotLow := low[_rightBars]
+        newPivotLowBar := bar_index[_rightBars]
+        
+        // Store in arrays
+        array.unshift(_pivotLowPrices, newPivotLow)
+        array.unshift(_pivotLowBars, newPivotLowBar)
+        
+        // Keep only last maxPivots
+        if array.size(_pivotLowPrices) > _maxPivots
+            array.pop(_pivotLowPrices)
+            array.pop(_pivotLowBars)
+        
+        newInShortSetup := true
+        newPivotConfirmedLow := false
+    
+    [newPivotLow, newPivotLowBar, newInShortSetup, newPivotConfirmedLow]
+
+f_confirmPivotLow_intrade(bool _inShortSetup, bool _pivotConfirmedLow, bool _waitingForPullback, int _pivotLowBar) =>
+    
+    newPivotConfirmedLow = _pivotConfirmedLow
+    
+    int barsSincePivotLow = bar_index - _pivotLowBar
+    if _inShortSetup and not _pivotConfirmedLow and not _waitingForPullback and not na(_pivotLowBar) and barsSincePivotLow > 0
+        if high[barsSincePivotLow - 1] > high[barsSincePivotLow]
+            newPivotConfirmedLow := true
+    
+    newPivotConfirmedLow
+
+// Usage for Pivot Low Detection
+[_tempPivotLow_intrade, _tempPivotLowBar_intrade, _tempInShortSetup_intrade, _tempPivotConfLow_intrade] = f_detectPivotLow_intrade(pl_intrade, inLongSetup_intrade, inShortSetup_intrade, waitingForPullbackShort_intrade, waitingForSecondEntryShort_intrade,
+                     pivotLow_intrade, pivotLowBar_intrade, pivotLowPrices_intrade, pivotLowBars_intrade, rightBars, maxPivots)
+
+pivotLow_intrade := _tempPivotLow_intrade
+pivotLowBar_intrade := _tempPivotLowBar_intrade
+inShortSetup_intrade := _tempInShortSetup_intrade
+pivotConfirmedLow_intrade := _tempPivotConfLow_intrade
+
+// Usage for Pivot Low Confirmation
+pivotConfirmedLow_intrade := f_confirmPivotLow_intrade(inShortSetup_intrade, pivotConfirmedLow_intrade, waitingForPullbackShort_intrade, pivotLowBar_intrade)
+
+
+// Function to count pivots near current price
+f_countPivotHighsNearPrice_intrade(float currentPrice, float tolerancePct) =>
+    int count = 0
+    int arraySize = array.size(pivotHighPrices)
+    
+    // Only process if array has elements
+    if arraySize > 0
+        float toleranceRange = currentPrice * (tolerancePct / 100)
+        
+        for i = 0 to arraySize - 1
+            float pivotPrice = array.get(pivotHighPrices, i)
+            
+            if math.abs(currentPrice - pivotPrice) <= toleranceRange
+                count += 1
+    
+    count
+
+f_countPivotLowsNearPrice_intrade(float currentPrice, float tolerancePct) =>
+    int count = 0
+    int arraySize = array.size(pivotLowPrices)
+    
+    // Only process if array has elements
+    if arraySize > 0
+        float toleranceRange = currentPrice * (tolerancePct / 100)
+        
+        for i = 0 to arraySize - 1
+            float pivotPrice = array.get(pivotLowPrices, i)
+            
+            if math.abs(currentPrice - pivotPrice) <= toleranceRange
+                count += 1
+    
+    count
+
+// Calculate counts
+pivotHighsNearby_intrade = showLongs ? f_countPivotHighsNearPrice_intrade(close, tolerance) : 0
+pivotLowsNearby_intrade = showShorts ? f_countPivotLowsNearPrice_intrade(close, tolerance) : 0
+
+// Plot Counter Pivot Points (Step 1)
+plotshape(ph_intrade and not waitingForPullbackLong_intrade and not waitingForSecondEntryLong_intrade and strategy.position_size < 0 ? high[rightBars] : na, 
+          title="Counter Pivot High", location=location.absolute, 
+          color=color.rgb(246, 255, 0, 43), style=shape.triangledown, size=size.tiny, offset=-rightBars)
+
+plotshape(pl_intrade and not waitingForPullbackShort_intrade and not waitingForSecondEntryShort_intrade and strategy.position_size > 0 ? low[rightBars] : na, 
+          title="Counter Pivot Low", location=location.absolute, 
+          color=color.rgb(255, 196, 0, 38), style=shape.triangleup, size=size.tiny, offset=-rightBars)
+
+//}
+
+// ===============================================================================================================
+// STEP 2: FE DETECTION ==============================================================================================={
+// ===============================================================================================================
+// First Entry Detection for Longs
+f_handleLongSetupEntry_intrade(bool _inLongSetup, bool _waitingForPullback, bool _waitingForSecondEntry, 
+                       float _pivotHigh, int _pivotHighBar, bool _pivotConfirmedHigh,
+                       float _firstEntryHigh, float _firstEntryLow, int _firstEntryBarHigh) =>
+    
+    newFirstEntryHigh = _firstEntryHigh
+    newFirstEntryLow = _firstEntryLow
+    newFirstEntryBarHigh = _firstEntryBarHigh
+    newWaitingForPullback = _waitingForPullback
+    newInLongSetup = _inLongSetup
+    newIsFailedSetup = false
+    
+    if _inLongSetup and not _waitingForPullback and not _waitingForSecondEntry and _pivotConfirmedHigh and na(newFirstEntryBarHigh) and strategy.position_size < 0
+        
+        if high > high[1] and high < _pivotHigh and bar_index > _pivotHighBar 
+            newFirstEntryHigh := high
+            newFirstEntryLow := low
+            newFirstEntryBarHigh := bar_index
+            newWaitingForPullback := true
+  
+    
+    [newFirstEntryHigh, newFirstEntryLow, newFirstEntryBarHigh, newWaitingForPullback, newInLongSetup, newIsFailedSetup]
+
+
+
+// Use DIFFERENT variable names for the tuple assignment, then reassign
+[_tempHigh_intrade, _tempLow_intrade, _tempBar_intrade, _tempPullback_intrade, _tempSetup_intrade, _tempFailed_intrade] = f_handleLongSetupEntry_intrade(inLongSetup_intrade, waitingForPullbackLong_intrade, waitingForSecondEntryLong_intrade, 
+                           pivotHigh_intrade, pivotHighBar_intrade, pivotConfirmedHigh_intrade, 
+                           firstEntryHigh_intrade, firstEntryLow_intrade, firstEntryBarHigh_intrade)
+
+// Now reassign to your actual variables
+firstEntryHigh_intrade := _tempHigh_intrade
+firstEntryLow_intrade := _tempLow_intrade
+firstEntryBarHigh_intrade := _tempBar_intrade
+waitingForPullbackLong_intrade := _tempPullback_intrade
+inLongSetup_intrade := _tempSetup_intrade
+isFailedSetup_intrade := _tempFailed_intrade
+
+
+
+// First Entry Detection for Shorts
+f_handleShortSetupEntry_intrade(bool _inShortSetup, bool _waitingForPullback, bool _waitingForSecondEntry, 
+                         float _pivotLow, int _pivotLowBar, bool _pivotConfirmedLow,
+                         float _firstEntryHigh, float _firstEntryLow, int _firstEntryBarLow) =>
+    
+    newFirstEntryHigh = _firstEntryHigh
+    newFirstEntryLow = _firstEntryLow
+    newFirstEntryBarLow = _firstEntryBarLow
+    newWaitingForPullback = _waitingForPullback
+    newInShortSetup = _inShortSetup
+    newIsFailedSetup = false
+    
+    if _inShortSetup and not _waitingForPullback and not _waitingForSecondEntry and _pivotConfirmedLow and na(newFirstEntryBarLow)
+        
+        // Valid entry below EMA
+        if low < low[1] and low > _pivotLow and bar_index > _pivotLowBar 
+            newFirstEntryHigh := high
+            newFirstEntryLow := low
+            newFirstEntryBarLow := bar_index
+            newWaitingForPullback := true
+        
+    
+    [newFirstEntryHigh, newFirstEntryLow, newFirstEntryBarLow, newWaitingForPullback, newInShortSetup, newIsFailedSetup]
+
+// Usage (assuming you already have these variables declared):
+[_tempHighShort_intrade, _tempLowShort_intrade, _tempBarShort_intrade, _tempPullbackShort_intrade, _tempSetupShort_intrade, _tempFailedShort_intrade] = f_handleShortSetupEntry_intrade(inShortSetup_intrade, waitingForPullbackShort_intrade, waitingForSecondEntryShort_intrade, 
+                             pivotLow_intrade, pivotLowBar_intrade, pivotConfirmedLow_intrade, 
+                             firstEntryHigh_intrade, firstEntryLow_intrade, firstEntryBarLow_intrade)
+
+// Reassign to actual variables
+firstEntryHigh_intrade := _tempHighShort_intrade
+firstEntryLow_intrade := _tempLowShort_intrade
+firstEntryBarLow_intrade := _tempBarShort_intrade
+waitingForPullbackShort_intrade := _tempPullbackShort_intrade
+inShortSetup_intrade := _tempSetupShort_intrade
+isFailedSetup_intrade := _tempFailedShort_intrade
+
+// Plot Counter First Entry Points (Step 2)
+plotshape(waitingForPullbackLong_intrade and not waitingForPullbackLong_intrade and inLongSetup_intrade and high > high[1] and high < pivotHigh_intrade and bar_index == firstEntryBarHigh_intrade and strategy.position_size < 0, title="First Entry Long", location=location.abovebar, color=color.green, style=shape.square, size=size.tiny)
+
+plotshape(waitingForPullbackShort_intrade and not waitingForSecondEntryShort_intrade and inShortSetup_intrade and low < low[1] and low > pivotLow_intrade and bar_index == firstEntryBarLow_intrade and strategy.position_size > 0, title="Counter First Entry Short", location=location.belowbar, color=color.rgb(255, 149, 0), style=shape.square, size=size.tiny)
+
+plotshape(waitingForPullback and not waitingForSecondEntryLong and inLongSetup and high > high[1] and high < pivotHigh and bar_index == firstEntryBarHigh and strategy.position_size == 0, title="First Entry Long", location=location.abovebar, color=color.green, style=shape.square, size=size.tiny)
+
+plotshape(waitingForPullback and not waitingForSecondEntryShort and inShortSetup and low < low[1] and low > pivotLow and bar_index == firstEntryBarLow and strategy.position_size == 0, title="First Entry Short", location=location.belowbar, color=color.red, style=shape.square, size=size.tiny)
+
+// }
+
+// ===============================================================================================================
+// STEP 3: PULLBACK DETECTION ========================================================================================={
+// ===============================================================================================================
+// Pullback Detection for Longs 
+f_detectLongPullback_intrade(bool _inLongSetup, bool _waitingForPullback, bool _waitingForSecondEntry,
+                     int _firstEntryBarHigh, float _pullbackHigh, float _pullbackLow, int _pullbackBarLong) =>
+    
+    newPullbackHigh = _pullbackHigh
+    newPullbackLow = _pullbackLow
+    newPullbackBarLong = _pullbackBarLong
+    newWaitingForPullback = _waitingForPullback
+    newWaitingForSecondEntry = _waitingForSecondEntry
+    
+    if _inLongSetup and _waitingForPullback and not _waitingForSecondEntry 
+        int barsSinceFE = bar_index - _firstEntryBarHigh
+        if not na(_firstEntryBarHigh) and bar_index > _firstEntryBarHigh
+            for i = 0 to barsSinceFE 
+                if low[i] < low[i+1]
+                    newPullbackHigh := high[i]
+                    newPullbackLow := low[i]
+                    newPullbackBarLong := bar_index[i]
+                    newWaitingForPullback := false
+                    newWaitingForSecondEntry := true
+                    break
+    
+    [newPullbackHigh, newPullbackLow, newPullbackBarLong, newWaitingForPullback, newWaitingForSecondEntry]
+
+// Usage for Long Pullback
+[_tempPBHighLong_intrade, _tempPBLowLong_intrade, _tempPBBarLong_intrade, _tempWaitPBLong_intrade, _tempWaitSELong_intrade] = f_detectLongPullback_intrade(inLongSetup_intrade, waitingForPullbackLong_intrade, waitingForSecondEntryLong_intrade,
+                         firstEntryBarHigh_intrade, pullbackHigh_intrade, pullbackLow_intrade, pullbackBarLong_intrade)
+
+pullbackHigh_intrade := _tempPBHighLong
+pullbackLow_intrade := _tempPBLowLong
+pullbackBarLong_intrade := _tempPBBarLong
+waitingForPullbackLong_intrade := _tempWaitPBLong
+waitingForSecondEntryLong_intrade := _tempWaitSELong
+
+
+// Pullback Detection for Shorts
+f_detectShortPullback_intrade(bool _inShortSetup, bool _waitingForPullback, bool _waitingForSecondEntry,
+                      int _firstEntryBarLow, float _pullbackHigh, float _pullbackLow, int _pullbackBarShort) =>
+    
+    newPullbackHigh = _pullbackHigh
+    newPullbackLow = _pullbackLow
+    newPullbackBarShort = _pullbackBarShort
+    newWaitingForPullback = _waitingForPullback
+    newWaitingForSecondEntry = _waitingForSecondEntry
+    
+    if _inShortSetup and _waitingForPullback and not _waitingForSecondEntry 
+        int barsSinceFE = bar_index - _firstEntryBarLow
+        if not na(_firstEntryBarLow) and bar_index > _firstEntryBarLow
+            for i = 0 to barsSinceFE 
+                if high[i] > high[i+1]
+                    newPullbackHigh := high[i]
+                    newPullbackLow := low[i]
+                    newPullbackBarShort := bar_index[i]
+                    newWaitingForPullback := false
+                    newWaitingForSecondEntry := true
+                    break
+    
+    [newPullbackHigh, newPullbackLow, newPullbackBarShort, newWaitingForPullback, newWaitingForSecondEntry]
+
+// Usage for Short Pullback
+[_tempPBHighShort_intrade, _tempPBLowShort_intrade, _tempPBBarShort_intrade, _tempWaitPBShort_intrade, _tempWaitSEShort_intrade] = f_detectShortPullback_intrade(inShortSetup_intrade, waitingForPullbackShort_intrade, waitingForSecondEntryShort_intrade,
+                          firstEntryBarLow_intrade, pullbackHigh_intrade, pullbackLow_intrade, pullbackBarShort_intrade)
+
+pullbackHigh_intrade := _tempPBHighShort
+pullbackLow_intrade := _tempPBLowShort
+pullbackBarShort_intrade := _tempPBBarShort
+waitingForPullbackShort_intrade := _tempWaitPBShort
+waitingForSecondEntryShort_intrade := _tempWaitSEShort
+
+// Plot Counter Pullback Points (Step 3)
+plotshape(waitingForSecondEntryLong_intrade and inLongSetup_intrade and bar_index == pullbackBarLong_intrade, 
+          title="Counter Pullback Long", location=location.belowbar, 
+          color=color.yellow, style=shape.circle, size=size.tiny)
+
+plotshape(waitingForSecondEntryShort_intrade and inShortSetup_intrade and bar_index == pullbackBarShort_intrade, 
+          title="Counter Pullback Short", location=location.abovebar, 
+          color=color.orange, style=shape.circle, size=size.tiny)
+
+// }
+
+// ===============================================================================================================
+// STEP 4: SETUP FAILURE DETECTION ===================================================================================={
+// ===============================================================================================================
+// LONG SETUP INVALIDATION/RESET
+f_checkLongSetupInvalidation_intrade(bool _inLongSetup, float _pivotHigh, int _pivotHighBar, int _maxSetupBars) =>
+    
+    shouldReset = false
+    
+    if inLongSetup_intrade
+        if high >= _pivotHigh or (_inLongSetup and (bar_index - _pivotHighBar) > _maxSetupBars)
+            shouldReset := true
+    
+    shouldReset
+
+
+
+// Usage for Long Setup Invalidation
+if f_checkLongSetupInvalidation_intrade(inLongSetup_intrade, pivotHigh_intrade, pivotHighBar_intrade, maxSetupBars)
+    pivotHigh_intrade := na
+    pivotHighBar_intrade := na
+    pivotLowBar_intrade := na
+    firstEntryHigh_intrade := na
+    firstEntryLow_intrade := na
+    firstEntryBarHigh_intrade := na
+    pullbackHigh_intrade := na
+    pullbackLow_intrade := na
+    pullbackBarLong_intrade := na
+    secondEntryHigh_intrade := na
+    secondEntryLow_intrade := na
+    inLongSetup_intrade := false
+    waitingForPullbackLong_intrade := false
+    waitingForSecondEntryLong_intrade := false
+    isFailedSetup_intrade := false
+    pivotConfirmedHigh_intrade := false
+
+
+// SHORT SETUP INVALIDATION/RESET
+f_checkShortSetupInvalidation_intrade(bool _inShortSetup, float _pivotLow, int _pivotLowBar, int _maxSetupBars) =>
+    
+    shouldReset = false
+    
+    if _inShortSetup
+        if low <= _pivotLow or (_inShortSetup and (bar_index - _pivotLowBar) > _maxSetupBars)
+            shouldReset := true
+    
+    shouldReset
+
+// Usage for Short Setup Invalidation
+if f_checkShortSetupInvalidation_intrade(inShortSetup_intrade, pivotLow_intrade, pivotLowBar_intrade, maxSetupBars)
+    pivotHigh_intrade := na
+    pivotLow_intrade := na
+    pivotHighBar_intrade := na
+    pivotLowBar_intrade := na
+    firstEntryHigh_intrade := na
+    firstEntryLow_intrade := na
+    firstEntryBarLow_intrade := na
+    pullbackHigh_intrade := na
+    pullbackLow_intrade := na
+    pullbackBarShort_intrade := na
+    secondEntryHigh_intrade := na
+    secondEntryLow_intrade := na
+    inLongSetup_intrade := false
+    inShortSetup_intrade := false
+    waitingForPullbackShort_intrade := false
+    waitingForSecondEntryShort_intrade := false
+    isFailedSetup_intrade := false
+    pivotConfirmedLow_intrade := false
+
+
+// }
+
+// ===============================================================================================================
+// STEP 5: SECOND ENTRY DETECTION & EXECUTION ========================================================================={
+// ===============================================================================================================
+float second_entry_long_loc_intrade = 0
+float second_entry_short_loc_intrade = 0
+bool higherHighFound_intrade = false
+bool LowerLowFound_intrade = false
+
+
+// Second Entry Detection for Longs
+if (inLongSetup_intrade and waitingForSecondEntryLong_intrade and not inTrade) or inLongSetup and waitingForSecondEntryLong_intrade and strategy.position_size < 0
+    ema_distance := math.abs((close - ema) / ema * 100)
+    // Check if current bar has higher high than previous
+    if high > high[1]
+        second_entry_long_loc_intrade := high
+        // If second entry forms below EMA, cancel setup
+
+        // Only enter if we're above EMA
+        int barsSincePullback_intrade = bar_index - pullbackBarLong_intrade
+        if not na(pullbackBarLong_intrade) and bar_index > pullbackBarLong_intrade
+            for i = 2 to barsSincePullback_intrade 
+                if high[i] > high[i+1]
+                    higherHighFound_intrade := true
+                    break // Exit the loop immediately once a higher high is found
+
+        if not higherHighFound_intrade and ema_slope > slope_value and ema_distance < ema_distance_thresh and pivotHighsNearby_intrade < Pivot_thresh
+            strategy.close('Short', "early short exit")
+            // Calculate bar distances
+            var string entryComment = ""
+            entryComment := "Counter Entry Long | " + "Pivot: " + str.tostring(bar_index - pivotHighBar_intrade) + " | " + "First: " + str.tostring(bar_index - firstEntryBarHigh_intrade) + " | " + "PB: " + str.tostring(bar_index - pullbackBarLong_intrade)
+
+            secondEntryHigh_intrade := high
+            secondEntryLow_intrade := low
+            secondEntryBar_intrade := bar_index
+            strategy.entry("Long", strategy.long, comment=entryComment)
+            inTrade := true
+            inLongSetup_intrade := false
+            
+            // Calculate stop loss and take profit levels
+            stopLoss := close * (1 - slPercent/100)
+            takeProfit := close * (1 + tpPercent/100)
+            
+            strategy.exit("Long Exit", "Long", stop=stopLoss, limit=takeProfit)
+
+
+
+// Second Entry Detection for Shorts
+if inShortSetup_intrade and waitingForSecondEntryShort_intrade and not inTrade or inShortSetup_intrade and waitingForSecondEntryShort_intrade and strategy.position_size > 0
+    ema_distance := math.abs((close - ema) / ema * 100)
+    // Check if current bar has lower low than previous
+    if low < low[1]
+        second_entry_short_loc_intrade := low
+        // Only enter if we're above EMA
+        int barsSincePullback_intrade = bar_index - pullbackBarShort_intrade
+        if not na(pullbackBarShort_intrade) and bar_index > pullbackBarShort_intrade
+            for i = 2 to barsSincePullback_intrade
+                if low[i] < low[i+1]
+                    higherHighFound_intrade := true
+                    break // Exit the loop immediately once a higher high is found
+        // Only enter if we're below EMA
+        if not LowerLowFound_intrade and ema_slope < -slope_value and ema_distance < ema_distance_thresh and pivotLowsNearby_intrade < Pivot_thresh
+            strategy.close('Long', "early long exit")
+            // Calculate bar distances
+            var string entryComment = ""
+            entryComment := "Counter Entry Short | " +  "Pivot: " + str.tostring(bar_index - pivotLowBar_intrade) + " | " + "First: " + str.tostring(bar_index - firstEntryBarLow_intrade) + " | " + "PB: " + str.tostring(bar_index - pullbackBarShort_intrade)
+            secondEntryHigh_intrade := high
+            secondEntryLow_intrade := low
+            secondEntryBar_intrade := bar_index
+            strategy.entry("Short", strategy.short, stop = prevLow, comment=entryComment)
+            inTrade := true
+            inShortSetup_intrade := false
+            
+            // Calculate stop loss and take profit levels
+            stopLoss := close * (1 + slPercent/100)
+            takeProfit := close * (1 - tpPercent/100)
+            
+            strategy.exit("Short Exit", "Short", stop=stopLoss, limit=takeProfit)
+
+plotarrow(second_entry_long_loc_intrade, colordown = color.rgb(251, 226, 0, 57), maxheight = 10)
+plotarrow(-second_entry_short_loc_intrade, colorup = color.rgb(252, 143, 0, 54), maxheight = 10)
+
+// }
+
+
+// FAILED ENTRIES =======================================================================================================================
+// Separate check for failed second entry long
+if inTrade and strategy.position_size > 0 and not isFailedSetup and bar_index <= secondEntryBar + 1
+    if low < low[1]
+        strategy.close("SE Long", comment="Failed Second Entry Long")
+        strategy.entry("Failed Long Short", strategy.short, comment="Failed Second Entry Short")
+        isFailedSetup := true
+        
+        // Set SL/TP for the reversed position
+        stopLoss := close * (1 + slPercent/100)
+        takeProfit := close * (1 - tpPercent/100)
+            
+
+// Add these exit conditions for both initial and reversed positions
+if strategy.position_size > 0
+    strategy.exit("SE Long Exit", "SE Long", stop=stopLoss, limit=takeProfit)
+    strategy.exit("FSE Long Exit", "Failed Short Long", stop=stopLoss, limit=takeProfit)
+        
+    
+// Reset variables after trade completion or failure
+if inTrade and strategy.position_size == 0
+    pivotHigh := na
+    pivotLow := na
+    pivotHighBar := na
+    pivotLowBar := na
+    firstEntryHigh := na
+    firstEntryLow := na
+    firstEntryBarHigh := na
+    firstEntryBarLow := na
+    pullbackHigh := na
+    pullbackLow := na
+    pullbackBarLong := na
+    pullbackBarShort := na
+    secondEntryHigh := na
+    secondEntryLow := na
+    inLongSetup := false
+    inShortSetup := false
+    waitingForPullback := false
+    waitingForSecondEntryLong := false
+    waitingForSecondEntryShort := false
+    inTrade := false
+    isFailedSetup := false
+    pivotConfirmedHigh := false 
+    pivotConfirmedLow := false 
+
+
+
+// Plot EMA
+plot(ema, color=color.blue, title="21 EMA")
+
+
+
+// Plot Second Entry Points (Step 4)
+plotshape(inTrade and not isFailedSetup and strategy.position_size > 0, 
+          title="Second Entry Long", location=location.belowbar, 
+          color=color.green, style=shape.diamond, size=size.normal)
+
+plotshape(inTrade and not isFailedSetup and strategy.position_size < 0, 
+          title="Second Entry Short", location=location.abovebar, 
+          color=color.red, style=shape.diamond, size=size.normal)
+
+// Plot Failed Second Entries
+plotshape(isFailedSetup and strategy.position_size > 0, 
+          title="Failed Second Entry Short to Long", location=location.belowbar, 
+          color=color.yellow, style=shape.triangleup, size=size.normal)
+
+plotshape(isFailedSetup and strategy.position_size < 0, 
+          title="Failed Second Entry Long to Short", location=location.abovebar, 
+          color=color.yellow, style=shape.triangledown, size=size.normal)
+
+
+// Add trend state label at the start of the script with other variables
+var label trendLabel = label.new(x=bar_index, y=low,text="",color=color.gray,textcolor=color.white,style=label.style_label_up,size=size.normal,xloc=xloc.bar_index)
+
+
+
+// Add labels for active setup state
+var label setupLabel = na
+label.delete(setupLabel[1])
+if inLongSetup
+    setupText = waitingForPullback ? "Waiting for Long Pullback" : waitingForSecondEntryLong ? "Waiting for Second Entry Long" : "Looking for First Entry Long"
+    setupLabel := label.new(bar_index, high, setupText, color=color.green, textcolor=color.white)
+else if inShortSetup
+    setupText = waitingForPullback ? "Waiting for Short Pullback" : waitingForSecondEntryShort ? "Waiting for Second Entry Short" : "Looking for First Entry Short"
+    setupLabel := label.new(bar_index, low, setupText, color=color.red, textcolor=color.white)
+
+///
+///
+
+// ============================================================================
+// COMPREHENSIVE DEBUGGING SUITE
+// ============================================================================
+
+// 1. PIVOT DETECTION DEBUG
+var label debugLabel1 = na
+if ph_intrade and bar_index > 100
+    debugLabel1 := label.new(x=bar_index, y=high, text="PH Detected", style=label.style_label_down, color=color.yellow, textcolor=color.black,size=size.tiny)
+
+// 2. LONG SETUP ACTIVATION DEBUG
+var label debugLabel2 = na
+if inLongSetup_intrade and not inLongSetup_intrade[1]
+    debugLabel2 := label.new(x=bar_index, y=high, text="Setup Active", style=label.style_label_down, color=color.orange, textcolor=color.white,size=size.small)
+
+// 3. PIVOT CONFIRMATION DEBUG
+var label debugLabel3 = na
+if pivotConfirmedHigh_intrade and not pivotConfirmedHigh_intrade[1]
+    debugLabel3 := label.new(x=bar_index, y=high, text="Pivot CONFIRMED", style=label.style_label_down, color=color.purple, textcolor=color.white,size=size.normal)
+
+// 4. FIRST ENTRY DETECTION DEBUG
+var label debugLabel4 = na
+if not na(firstEntryHigh_intrade) and na(firstEntryHigh_intrade[1])
+    debugLabel4 := label.new(x=bar_index, y=high, text="Entry High Set: " + str.tostring(firstEntryHigh_intrade, "#.##"), style=label.style_label_down, color=color.blue, textcolor=color.white,size=size.normal)
+
+
+// 6. POSITION SIZE DEBUG
+bgcolor(strategy.position_size < 0 ? color.new(color.red, 90) : na, title="In Short Position")
+
+// 7. DETAILED CONDITION CHECK - Shows why shape ISN'T plotting
+var label debugLabel6 = na
+if inLongSetup_intrade and strategy.position_size < 0 and bar_index % 10 == 0  // Every 10 bars
+    string debugText = ""
+    debugText := debugText + "Setup: " + str.tostring(inLongSetup_intrade) + "\n"
+    debugText := debugText + "WaitPB: " + str.tostring(waitingForPullbackLong_intrade) + "\n"
+    debugText := debugText + "Confirmed: " + str.tostring(pivotConfirmedHigh_intrade) + "\n"
+    debugText := debugText + "EntryHigh: " + (na(firstEntryHigh_intrade) ? "NA" : str.tostring(firstEntryHigh_intrade, "#.##")) + "\n"
+    debugText := debugText + "PosSize: " + str.tostring(strategy.position_size)
+    
+    label.delete(debugLabel6)
+    debugLabel6 := label.new(x=bar_index, y=high * 1.02, text=debugText, style=label.style_label_down, color=color.gray, textcolor=color.white,size=size.small)
+
+// 8. THE ACTUAL PLOTSHAPE WITH EXTRA DEBUG
+bool shapeCondition = waitingForPullbackLong_intrade and not waitingForPullbackLong_intrade[1] and 
+                      not na(firstEntryHigh_intrade) and strategy.position_size < 0
+
+plotshape(shapeCondition, title="First Entry Long", location=location.abovebar,   color=color.green, style=shape.square, size=size.tiny)
+
+// 9. ALTERNATIVE SHAPE - Test if ANY condition works
+plotshape(waitingForPullbackLong_intrade and not waitingForPullbackLong_intrade[1] and strategy.position_size < 0,  title="Pullback Started (No Entry Check)", location=location.belowbar, color=color.aqua, style=shape.circle, size=size.tiny)
+
+// 10. TABLE DEBUG - Shows current state continuously
+var table debugTable = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 50))
+if barstate.islast
+    table.cell(debugTable, 0, 0, "Variable", bgcolor=color.gray, text_color=color.white)
+    table.cell(debugTable, 1, 0, "Value", bgcolor=color.gray, text_color=color.white)
+    
+    table.cell(debugTable, 0, 1, "inLongSetup", text_color=color.white)
+    table.cell(debugTable, 1, 1, str.tostring(inLongSetup_intrade), 
+               bgcolor=inLongSetup_intrade ? color.green : color.red, text_color=color.white)
+    
+    table.cell(debugTable, 0, 2, "pivotConfirmed", text_color=color.white)
+    table.cell(debugTable, 1, 2, str.tostring(pivotConfirmedHigh_intrade), 
+               bgcolor=pivotConfirmedHigh_intrade ? color.green : color.red, text_color=color.white)
+    
+    table.cell(debugTable, 0, 3, "waitingPullback", text_color=color.white)
+    table.cell(debugTable, 1, 3, str.tostring(waitingForPullbackLong_intrade), 
+               bgcolor=waitingForPullbackLong_intrade ? color.green : color.red, text_color=color.white)
+    
+    table.cell(debugTable, 0, 4, "firstEntryHigh", text_color=color.white)
+    table.cell(debugTable, 1, 4, na(firstEntryHigh_intrade) ? "NA" : str.tostring(firstEntryHigh_intrade, "#.##"), 
+               bgcolor=na(firstEntryHigh_intrade) ? color.red : color.green, text_color=color.white)
+    
+    table.cell(debugTable, 0, 5, "Position Size", text_color=color.white)
+    table.cell(debugTable, 1, 5, str.tostring(strategy.position_size), 
+               bgcolor=strategy.position_size < 0 ? color.green : color.red, text_color=color.white)
+    
+    table.cell(debugTable, 0, 6, "pivotHigh", text_color=color.white)
+    table.cell(debugTable, 1, 6, na(pivotHigh_intrade) ? "NA" : str.tostring(pivotHigh_intrade, "#.##"), text_color=color.white)
+    
+    table.cell(debugTable, 0, 7, "pivotHighBar", text_color=color.white)
+    table.cell(debugTable, 1, 7, na(pivotHighBar_intrade) ? "NA" : str.tostring(bar_index - pivotHighBar_intrade) + " bars ago", text_color=color.white)
