@@ -123,20 +123,19 @@ for i = 0 to lookback - 1
 
 // ============================================================================
 // PIVOT HIGH DETECTION AND CONFIRMATION
-f_detectPivotHigh(float _ph, bool _inShortSetup, bool _waitingForPullback, bool _waitingForSecondEntry, 
-                  float _pivotHigh, int _pivotHighBar,
+f_detectPivotHigh(float _ph, bool _inLongSetup, bool _inShortSetup, bool _waitingForPullback, 
+                  bool _waitingForSecondEntry, float _pivotHigh, int _pivotHighBar,
                   array<float> _pivotHighPrices, array<int> _pivotHighBars, 
                   int _rightBars, int _maxPivots) =>
     
     newPivotHigh = _pivotHigh
     newPivotHighBar = _pivotHighBar
-    pivotDetected = false
+    newInLongSetup = _inLongSetup
+    newPivotConfirmedHigh = false
     
-    // Detect pivot without checking setup state - just check if we're not already tracking something
-    if _ph and not _inShortSetup and not _waitingForPullback and not _waitingForSecondEntry 
+    if _ph and not _inLongSetup and not _inShortSetup and not _waitingForPullback and not _waitingForSecondEntry and _ph > ema
         newPivotHigh := high[_rightBars]
         newPivotHighBar := bar_index[_rightBars]
-        pivotDetected := true
         
         // Store in arrays
         array.unshift(_pivotHighPrices, newPivotHigh)
@@ -146,64 +145,53 @@ f_detectPivotHigh(float _ph, bool _inShortSetup, bool _waitingForPullback, bool 
         if array.size(_pivotHighPrices) > _maxPivots
             array.pop(_pivotHighPrices)
             array.pop(_pivotHighBars)
-    
-    [newPivotHigh, newPivotHighBar, pivotDetected]
-
-// PIVOT CONFIRMATION - Confirms pivot AND activates setup
-f_confirmPivotHigh(bool _inLongSetup, bool _pivotConfirmedHigh, bool _waitingForPullback, 
-                   int _pivotHighBar, bool _pivotDetected) =>
-    
-    newPivotConfirmedHigh = _pivotConfirmedHigh
-    newInLongSetup = _inLongSetup
-    
-    // If a new pivot was just detected, activate setup (don't wait for confirmation)
-    if _pivotDetected
+        
         newInLongSetup := true
         newPivotConfirmedHigh := false
     
-    // Confirm the pivot if setup is active
+    [newPivotHigh, newPivotHighBar, newInLongSetup, newPivotConfirmedHigh]
+
+f_confirmPivotHigh(bool _inLongSetup, bool _pivotConfirmedHigh, bool _waitingForPullback, int _pivotHighBar) =>
+    
+    newPivotConfirmedHigh = _pivotConfirmedHigh
+    
     int barsSincePivotHigh = bar_index - _pivotHighBar
-    if newInLongSetup and not newPivotConfirmedHigh and not _waitingForPullback and not na(_pivotHighBar) and barsSincePivotHigh > 0
+    if _inLongSetup and not _pivotConfirmedHigh and not _waitingForPullback and not na(_pivotHighBar) and barsSincePivotHigh > 0
         if barsSincePivotHigh <= 500  // Pine Script lookback limit
             if low[barsSincePivotHigh - 1] < low[barsSincePivotHigh]
                 newPivotConfirmedHigh := true
     
-    [newInLongSetup, newPivotConfirmedHigh]
+    newPivotConfirmedHigh
 
-// LONG PIVOT DETECTION
-[_tempPivotHigh, _tempPivotHighBar, _pivotDetectedLong] = 
-     f_detectPivotHigh(ph, inShortSetup, waitingForPullback, waitingForSecondEntryLong,
+// Usage for Pivot High Detection
+[_tempPivotHigh, _tempPivotHighBar, _tempInLongSetup, _tempPivotConfHigh] = 
+     f_detectPivotHigh(ph, inLongSetup, inShortSetup, waitingForPullback, waitingForSecondEntryLong,
                       pivotHigh, pivotHighBar, pivotHighPrices, pivotHighBars, 
                       rightBars, maxPivots)
 
 pivotHigh := _tempPivotHigh
 pivotHighBar := _tempPivotHighBar
-
-// Confirmation handles setup activation
-[_tempInLongSetup, _tempPivotConfHigh] = 
-     f_confirmPivotHigh(inLongSetup, pivotConfirmedHigh, waitingForPullback, 
-                       pivotHighBar, _pivotDetectedLong)
-
 inLongSetup := _tempInLongSetup
 pivotConfirmedHigh := _tempPivotConfHigh
 
+// Usage for Pivot High Confirmation
+pivotConfirmedHigh := f_confirmPivotHigh(inLongSetup, pivotConfirmedHigh, waitingForPullback, pivotHighBar)
+
 
 // ============================================================================
-// PIVOT LOW DETECTION - Only detects pivots, doesn't check setup state
-f_detectPivotLow(float _pl, bool _inLongSetup, bool _waitingForPullback, bool _waitingForSecondEntry, 
-                  float _pivotLow, int _pivotLowBar,
-                  array<float> _pivotLowPrices, array<int> _pivotLowBars, 
-                  int _rightBars, int _maxPivots) =>
+// PIVOT LOW DETECTION AND CONFIRMATION
+f_detectPivotLow(float _pl, bool _inLongSetup, bool _inShortSetup, bool _waitingForPullback, 
+                 bool _waitingForSecondEntry, float _pivotLow, int _pivotLowBar,
+                 array<float> _pivotLowPrices, array<int> _pivotLowBars, int _rightBars, int _maxPivots) =>
     
     newPivotLow = _pivotLow
     newPivotLowBar = _pivotLowBar
-    pivotDetected = false
+    newInShortSetup = _inShortSetup
+    newPivotConfirmedLow = false
     
-    // Detect pivot without checking setup state - just check if we're not already tracking something
-    if _pl and not _inLongSetup and not _waitingForPullback and not _waitingForSecondEntry 
+    if _pl and not _inLongSetup and not _inShortSetup and not _waitingForPullback and not _waitingForSecondEntry and _pl < ema
         newPivotLow := low[_rightBars]
         newPivotLowBar := bar_index[_rightBars]
-        pivotDetected := true
         
         // Store in arrays
         array.unshift(_pivotLowPrices, newPivotLow)
@@ -213,47 +201,34 @@ f_detectPivotLow(float _pl, bool _inLongSetup, bool _waitingForPullback, bool _w
         if array.size(_pivotLowPrices) > _maxPivots
             array.pop(_pivotLowPrices)
             array.pop(_pivotLowBars)
-    
-    [newPivotLow, newPivotLowBar, pivotDetected]
-
-// PIVOT CONFIRMATION - Confirms pivot AND activates setup
-f_confirmPivotLow(bool _inShortSetup, bool _pivotConfirmedLow, bool _waitingForPullback, 
-                   int _pivotLowBar, bool _pivotDetected) =>
-    
-    newPivotConfirmedLow = _pivotConfirmedLow
-    newInShortSetup = _inShortSetup
-    
-    // If a new pivot was just detected, activate setup (don't wait for confirmation)
-    if _pivotDetected
+        
         newInShortSetup := true
         newPivotConfirmedLow := false
     
-    // Confirm the pivot if setup is active
-    int barsSincePivotLow = bar_index - _pivotLowBar
-    if newInShortSetup and not newPivotConfirmedLow and not _waitingForPullback and not na(_pivotLowBar) and barsSincePivotLow > 0
-        if barsSincePivotLow <= 500  // Pine Script lookback limit
-            // Check if the bar AFTER the pivot has higher high than pivot bar
-            if high[barsSincePivotLow - 1] > high[barsSincePivotLow]
-                newPivotConfirmedLow := true
-    
-    [newInShortSetup, newPivotConfirmedLow]
+    [newPivotLow, newPivotLowBar, newInShortSetup, newPivotConfirmedLow]
 
-// SHORT PIVOT DETECTION
-[_tempPivotLow, _tempPivotLowBar, _pivotDetectedShort] = 
-     f_detectPivotLow(pl, inLongSetup, waitingForPullback, waitingForSecondEntryShort,
-                      pivotLow, pivotLowBar, pivotLowPrices, pivotLowBars, 
-                      rightBars, maxPivots)
+f_confirmPivotLow(bool _inShortSetup, bool _pivotConfirmedLow, bool _waitingForPullback, int _pivotLowBar) =>
+    
+    newPivotConfirmedLow = _pivotConfirmedLow
+    
+    int barsSincePivotLow = bar_index - _pivotLowBar
+    if _inShortSetup and not _pivotConfirmedLow and not _waitingForPullback and not na(_pivotLowBar) and barsSincePivotLow > 0
+        if high[barsSincePivotLow - 1] > high[barsSincePivotLow]
+            newPivotConfirmedLow := true
+    
+    newPivotConfirmedLow
+
+// Usage for Pivot Low Detection
+[_tempPivotLow, _tempPivotLowBar, _tempInShortSetup, _tempPivotConfLow] = f_detectPivotLow(pl, inLongSetup, inShortSetup, waitingForPullback, waitingForSecondEntryShort,
+                     pivotLow, pivotLowBar, pivotLowPrices, pivotLowBars, rightBars, maxPivots)
 
 pivotLow := _tempPivotLow
 pivotLowBar := _tempPivotLowBar
-
-// Confirmation handles setup activation
-[_tempInShortSetup, _tempPivotConfLow] = 
-     f_confirmPivotLow(inShortSetup, pivotConfirmedLow, waitingForPullback, 
-                       pivotLowBar, _pivotDetectedShort)
-
 inShortSetup := _tempInShortSetup
 pivotConfirmedLow := _tempPivotConfLow
+
+// Usage for Pivot Low Confirmation
+pivotConfirmedLow := f_confirmPivotLow(inShortSetup, pivotConfirmedLow, waitingForPullback, pivotLowBar)
 
 
 // Function to count pivots near current price
@@ -831,10 +806,8 @@ f_handleLongSetupEntry_intrade(bool _inLongSetup, bool _waitingForPullback, bool
             newFirstEntryLow := low
             newFirstEntryBarHigh := bar_index
             newWaitingForPullback := true
-  
-    
+     
     [newFirstEntryHigh, newFirstEntryLow, newFirstEntryBarHigh, newWaitingForPullback, newInLongSetup, newIsFailedSetup]
-
 
 
 // Use DIFFERENT variable names for the tuple assignment, then reassign
